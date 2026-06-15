@@ -103,6 +103,23 @@ and outputs that are *always* budgeted summaries.
 
 ---
 
+## Benchmark
+
+Orienting in a repo (`repo_overview` + `repo_map` at a 2000-token budget) vs the
+"pack-the-repo" baseline (tiktoken count of all source). Reproduce with
+`python scripts/bench.py <repo> [...]`:
+
+| Repo | Files | Pack-the-repo tokens | Orient tokens | **Savings** |
+|---|---:|---:|---:|---:|
+| py-blog (sample) | 6 | 1,027 | 225 | **78%** |
+| ts-store (sample) | 6 | 1,125 | 221 | **80%** |
+| go-svc (sample) | 5 | 861 | 139 | **84%** |
+| this repo | 28 | 19,599 | 782 | **96%** |
+
+Orientation cost stays roughly flat as the repo grows — the savings widen the
+bigger the codebase. Drill-down calls (`explain_symbol`, `find_usages`) answer
+specific questions in ~200 tokens instead of re-reading files.
+
 ## How it works
 
 ```
