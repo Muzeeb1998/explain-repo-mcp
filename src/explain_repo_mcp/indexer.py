@@ -26,7 +26,8 @@ from .walker import walk_files
 
 # rel_fname: repo-relative posix path. fname: absolute path.
 # line: 0-based row. name: identifier text. kind: "def" | "ref".
-Tag = namedtuple("Tag", "rel_fname fname line name kind")
+# detail: capture subtype, e.g. function/class/method/call/type/interface.
+Tag = namedtuple("Tag", "rel_fname fname line name kind detail")
 
 # tsl language name -> tags query file stem (in queries/).
 LANG_TO_QUERY = {
@@ -106,8 +107,10 @@ def extract_tags(fname: str, rel_fname: str) -> list[Tag]:
     for cap_name, nodes in captures.items():
         if cap_name.startswith(_DEF_PREFIX):
             kind = "def"
+            detail = cap_name[len(_DEF_PREFIX):]
         elif cap_name.startswith(_REF_PREFIX):
             kind = "ref"
+            detail = cap_name[len(_REF_PREFIX):]
         else:
             continue
         for node in nodes:
@@ -115,7 +118,7 @@ def extract_tags(fname: str, rel_fname: str) -> list[Tag]:
                 text = node.text.decode("utf-8", "replace")
             except Exception:
                 continue
-            tags.append(Tag(rel_fname, fname, node.start_point[0], text, kind))
+            tags.append(Tag(rel_fname, fname, node.start_point[0], text, kind, detail))
     return tags
 
 
@@ -131,7 +134,7 @@ class Indexer:
         self.db_path = cache_dir / f"{digest}.sqlite"
         self._conn = sqlite3.connect(self.db_path)
         self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS file_tags ("
+            "CREATE TABLE IF NOT EXISTS file_tags_v2 ("
             "  rel TEXT PRIMARY KEY,"
             "  mtime REAL NOT NULL,"
             "  size INTEGER NOT NULL,"
@@ -144,17 +147,20 @@ class Indexer:
 
     def _cached(self, rel: str, mtime: float, size: int) -> list[Tag] | None:
         row = self._conn.execute(
-            "SELECT mtime, size, tags FROM file_tags WHERE rel = ?", (rel,)
+            "SELECT mtime, size, tags FROM file_tags_v2 WHERE rel = ?", (rel,)
         ).fetchone()
         if row and row[0] == mtime and row[1] == size:
             fname = str(self.root / rel)
-            return [Tag(rel, fname, ln, nm, kd) for ln, nm, kd in json.loads(row[2])]
+            return [
+                Tag(rel, fname, ln, nm, kd, dt)
+                for ln, nm, kd, dt in json.loads(row[2])
+            ]
         return None
 
     def _store(self, rel: str, mtime: float, size: int, tags: list[Tag]) -> None:
-        payload = json.dumps([[t.line, t.name, t.kind] for t in tags])
+        payload = json.dumps([[t.line, t.name, t.kind, t.detail] for t in tags])
         self._conn.execute(
-            "INSERT INTO file_tags(rel, mtime, size, tags) VALUES(?,?,?,?) "
+            "INSERT INTO file_tags_v2(rel, mtime, size, tags) VALUES(?,?,?,?) "
             "ON CONFLICT(rel) DO UPDATE SET mtime=?, size=?, tags=?",
             (rel, mtime, size, payload, mtime, size, payload),
         )
@@ -173,17 +179,18 @@ class Indexer:
         return tags
 
     def index(
-        self, paths: list[str] | None = None
+        self, paths: list[str] | None = None, max_files: int = 50_000
     ) -> tuple[list[Tag], dict]:
         """Walk the repo (or ``paths`` subset) and return all tags + stats.
 
         Re-uses the SQLite cache; only changed/new files are re-parsed.
+        ``max_files`` caps the walk so monorepos can't blow up memory/time.
         """
         all_tags: list[Tag] = []
         files_scanned = 0
         files_with_tags = 0
         langs: dict[str, int] = {}
-        for rel in walk_files(self.root, paths):
+        for rel in walk_files(self.root, paths, max_files=max_files):
             files_scanned += 1
             tags = self.tags_for_file(rel)
             if tags:

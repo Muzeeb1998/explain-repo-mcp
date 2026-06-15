@@ -68,9 +68,10 @@ via the `repo_path` tool argument.
 |---|---|---|
 | `repo_overview` | Languages, top-level layout, entry points, build files, size. **Call first.** | tiny |
 | `repo_map` | Ranked, token-budgeted symbol map. `focus`, `token_budget`, `paths`. | budgeted |
-
-> Drill-down tools (`search_code`, `explain_symbol`, `find_usages`, `file_outline`) are
-> next on the roadmap.
+| `file_outline` | Signatures of one file (no bodies); decide what to read fully. | tiny |
+| `explain_symbol` | Signature + surrounding context + where a symbol is referenced. | small |
+| `find_usages` | All references to a symbol, paginated. | small |
+| `search_code` | Keyword/regex search, ranked file:line snippets, paginated. | small |
 
 ### `repo_map` parameters
 
@@ -78,6 +79,13 @@ via the `repo_path` tool argument.
 - `token_budget` — hard cap on output size (default 2000, clamped 200–20000).
 - `paths` — scope to sub-directories, e.g. `["src/auth"]`.
 - `repo_path` — override the default repo for this call.
+
+### Drill-down parameters
+
+- `file_outline(file, repo_path?)`
+- `explain_symbol(symbol, context_lines=4, repo_path?)`
+- `find_usages(symbol, page=1, page_size=50, paths?, repo_path?)`
+- `search_code(query, page=1, page_size=30, regex=false, paths?, repo_path?)`
 
 ---
 

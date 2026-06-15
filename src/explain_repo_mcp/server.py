@@ -1,11 +1,20 @@
 """FastMCP server exposing progressive, token-budgeted repo understanding.
 
-Tools (read-only, idempotent):
+Tools (all read-only, idempotent):
   - repo_overview : cheap orientation — languages, layout, entry points.
   - repo_map      : ranked, token-budgeted symbol map (the flagship).
+  - file_outline  : signatures of one file — no bodies.
+  - explain_symbol: signature + context + references for one symbol.
+  - find_usages   : all references to a symbol, paginated.
+  - search_code   : keyword/regex search, ranked snippets, paginated.
 
 Run over stdio:  ``explain-repo-mcp [/path/to/repo]``
 The repo can be set once via CLI/env and overridden per-call via ``repo_path``.
+
+Environment:
+  EXPLAIN_REPO_PATH       default repo path
+  EXPLAIN_REPO_TRANSPORT  stdio (default) | streamable-http | sse
+  EXPLAIN_REPO_CACHE_DIR  override SQLite cache location
 """
 
 from __future__ import annotations
@@ -18,6 +27,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
+from .drilldown import explain_symbol, file_outline, find_usages, search_code
 from .indexer import Indexer, supported_languages
 from .overview import build_overview, render_overview
 from .ranker import rank_tags, render_map
@@ -91,6 +101,85 @@ class RepoMap(BaseModel):
     next_actions: list[str]
 
 
+# --- drill-down models (fields optional so error paths validate cleanly) ----
+class OutlineSymbol(BaseModel):
+    name: str
+    kind: str
+    line: int
+    signature: str = ""
+
+
+class FileOutline(BaseModel):
+    file: str
+    error: str | None = None
+    language_lines: int = 0
+    symbol_count: int = 0
+    symbols: list[OutlineSymbol] = []
+    next_actions: list[str] = []
+
+
+class Loc(BaseModel):
+    file: str
+    line: int
+
+
+class DefLoc(BaseModel):
+    file: str
+    line: int
+    kind: str = "def"
+
+
+class SymbolDef(BaseModel):
+    file: str
+    line: int
+    kind: str
+    signature: str = ""
+    context: str = ""
+
+
+class ExplainResult(BaseModel):
+    symbol: str
+    found: bool
+    error: str | None = None
+    did_you_mean: list[str] = []
+    definition_count: int = 0
+    definitions: list[SymbolDef] = []
+    reference_count: int = 0
+    referenced_in_files: list[str] = []
+    sample_references: list[Loc] = []
+    next_actions: list[str] = []
+
+
+class Usages(BaseModel):
+    symbol: str
+    total_usages: int = 0
+    page: int = 1
+    page_size: int = 50
+    has_more: bool = False
+    defined_at: list[DefLoc] = []
+    usages: list[Loc] = []
+    next_actions: list[str] = []
+
+
+class Match(BaseModel):
+    file: str
+    line: int
+    snippet: str = ""
+
+
+class SearchResult(BaseModel):
+    query: str
+    error: str | None = None
+    regex: bool = False
+    total_matches: int = 0
+    files_scanned: int = 0
+    page: int = 1
+    page_size: int = 30
+    has_more: bool = False
+    matches: list[Match] = []
+    next_actions: list[str] = []
+
+
 # ----------------------------------------------------------------------- helpers
 def _resolve_repo(repo_path: str | None) -> Path:
     candidate = repo_path or (str(_DEFAULT_REPO) if _DEFAULT_REPO else None) or os.getcwd()
@@ -108,7 +197,9 @@ def _resolve_repo(repo_path: str | None) -> Path:
 def _get_indexer(root: Path) -> Indexer:
     key = str(root)
     if key not in _indexers:
-        _indexers[key] = Indexer(root)
+        cache_env = os.environ.get("EXPLAIN_REPO_CACHE_DIR")
+        cache_dir = Path(cache_env).expanduser() if cache_env else None
+        _indexers[key] = Indexer(root, cache_dir=cache_dir)
     return _indexers[key]
 
 
@@ -179,8 +270,8 @@ def repo_map(
             "paths=[<subdir>], or pass focus=<area> to narrow."
         )
     next_actions.append(
-        "Inspect a symbol shown here with explain_symbol / find_usages / "
-        "file_outline (coming in the drill-down toolset)."
+        "Inspect a symbol shown here with explain_symbol, find_usages, or "
+        "file_outline. Use search_code for keyword/regex lookups."
     )
 
     return RepoMap(
@@ -199,6 +290,91 @@ def repo_map(
         text=result.text,
         next_actions=next_actions,
     )
+
+
+@mcp.tool(
+    name="file_outline",
+    annotations=_READONLY,
+    description=(
+        "Skeleton of a single file: every definition's name, kind, line, and "
+        "signature line — no bodies. Lets you decide what's worth reading fully "
+        "before spending tokens on it."
+    ),
+)
+def file_outline_tool(file: str, repo_path: str | None = None) -> FileOutline:
+    root = _resolve_repo(repo_path)
+    indexer = _get_indexer(root)
+    out = file_outline(indexer, file)
+    out["next_actions"] = [
+        "Read a specific symbol's full body with your editor/file tools, or call "
+        "explain_symbol for its definition + references.",
+    ]
+    return FileOutline.model_validate(out)
+
+
+@mcp.tool(
+    name="explain_symbol",
+    annotations=_READONLY,
+    description=(
+        "Explain one symbol: its signature, defining file:line, a few lines of "
+        "surrounding context, and where it is referenced across the repo. "
+        "Drill-down, not a dump. If the symbol is unknown, suggests near matches."
+    ),
+)
+def explain_symbol_tool(
+    symbol: str, context_lines: int = 4, repo_path: str | None = None
+) -> ExplainResult:
+    root = _resolve_repo(repo_path)
+    indexer = _get_indexer(root)
+    out = explain_symbol(indexer, symbol, context_lines=max(0, min(context_lines, 20)))
+    out["next_actions"] = [
+        "Call find_usages for the full, paginated reference list.",
+        "Call file_outline on a defining file to see its other symbols.",
+    ]
+    return ExplainResult.model_validate(out)
+
+
+@mcp.tool(
+    name="find_usages",
+    annotations=_READONLY,
+    description=(
+        "All references to a symbol across the repo, paginated. Returns where it "
+        "is defined plus a page of usage file:line locations."
+    ),
+)
+def find_usages_tool(
+    symbol: str, page: int = 1, page_size: int = 50,
+    paths: list[str] | None = None, repo_path: str | None = None,
+) -> Usages:
+    root = _resolve_repo(repo_path)
+    indexer = _get_indexer(root)
+    out = find_usages(indexer, symbol, page=page,
+                      page_size=max(1, min(page_size, 200)), paths=paths)
+    if out.get("has_more"):
+        out["next_actions"] = [f"Call again with page={out['page'] + 1} for more usages."]
+    return Usages.model_validate(out)
+
+
+@mcp.tool(
+    name="search_code",
+    annotations=_READONLY,
+    description=(
+        "Keyword or regex search across the repo's source. Returns ranked "
+        "file:line snippets, paginated. Set regex=true for pattern search. Scope "
+        "with paths=[<subdir>]."
+    ),
+)
+def search_code_tool(
+    query: str, page: int = 1, page_size: int = 30, regex: bool = False,
+    paths: list[str] | None = None, repo_path: str | None = None,
+) -> SearchResult:
+    root = _resolve_repo(repo_path)
+    indexer = _get_indexer(root)
+    out = search_code(indexer, query, page=page,
+                      page_size=max(1, min(page_size, 100)), regex=regex, paths=paths)
+    if out.get("has_more"):
+        out["next_actions"] = [f"Call again with page={out['page'] + 1} for more matches."]
+    return SearchResult.model_validate(out)
 
 
 def _tokenize(text: str) -> list[str]:

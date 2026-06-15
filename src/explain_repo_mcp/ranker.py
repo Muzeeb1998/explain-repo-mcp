@@ -117,7 +117,10 @@ def rank_tags(
 
 
 def _kind_of(tag_list: list[Tag]) -> str:
-    # Tags only carry def/ref; without per-capture kind we label generically.
+    # Use the most specific def subtype (function/class/method/...).
+    for t in tag_list:
+        if t.detail:
+            return t.detail
     return "def"
 
 
