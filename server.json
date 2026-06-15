@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.Muzeeb1998/explain-repo-mcp",
+  "description": "Progressive, token-budgeted repo understanding — ranked symbol map + drill-down, zero setup.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/Muzeeb1998/explain-repo-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "explain-repo-mcp",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}

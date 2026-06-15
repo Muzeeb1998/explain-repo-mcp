@@ -1,0 +1,41 @@
+[project]
+name = "explain-repo-mcp"
+version = "0.1.0"
+description = "Progressive, token-budgeted repo understanding for MCP clients — zero setup, language-agnostic."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Muzeeb" }]
+keywords = ["mcp", "model-context-protocol", "code-analysis", "tree-sitter", "repo-map", "pagerank"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "mcp>=1.2.0",
+    "grep-ast>=0.5.0",
+    "tree-sitter-language-pack>=0.8.0",
+    "networkx>=3.2",
+    "scipy>=1.11",
+    "pygments>=2.17",
+    "tiktoken>=0.7.0",
+    "pathspec>=0.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/Muzeeb1998/explain-repo-mcp"
+Repository = "https://github.com/Muzeeb1998/explain-repo-mcp"
+
+[project.scripts]
+explain-repo-mcp = "explain_repo_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/explain_repo_mcp"]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6"]
